@@ -1,7 +1,29 @@
+# superport - Minimal Port Forwarding CLI (Client + Auto Public IP Detection)
+# Repo Structure:
+# superport/
+# ├── superport
+# ├── install.sh
+# └── README.md
+
+############################
+# File: superport
+############################
 #!/usr/bin/env bash
 
 CONFIG="$HOME/.superport.conf"
 TUNNELS="$HOME/.superport_tunnels"
+
+get_public_ip() {
+  PUBLIC_IP=$(curl -s https://api.ipify.org)
+  if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(curl -s https://ifconfig.me)
+  fi
+  echo "$PUBLIC_IP"
+}
+
+get_private_ip() {
+  hostname -I | awk '{print $1}'
+}
 
 random_port() {
   shuf -i 20000-60000 -n 1
@@ -12,22 +34,23 @@ setup() {
   read -p "Enter VPS IP or Domain: " VPS_HOST
   read -p "Enter VPS Username: " VPS_USER
 
-  echo "VPS_HOST=$VPS_HOST" > $CONFIG
-  echo "VPS_USER=$VPS_USER" >> $CONFIG
+  echo "VPS_HOST=$VPS_HOST" > "$CONFIG"
+  echo "VPS_USER=$VPS_USER" >> "$CONFIG"
 
-  echo "Setup saved!"
+  echo "Setup saved to $CONFIG"
 }
 
 load_config() {
   if [ ! -f "$CONFIG" ]; then
-    echo "Run: superport setup first"
+    echo "Config not found. Run: superport setup"
     exit 1
   fi
-  source $CONFIG
+  source "$CONFIG"
 }
 
 add_tunnel() {
   load_config
+
   TYPE=$1
   LOCAL_PORT=$2
 
@@ -38,20 +61,35 @@ add_tunnel() {
 
   PUBLIC_PORT=$(random_port)
 
-  echo "Creating tunnel..."
+  echo "Detecting VPS IP type..."
+
+  VPS_PUBLIC_IP=$(ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} "curl -s https://api.ipify.org || curl -s https://ifconfig.me")
+  VPS_PRIVATE_IP=$(ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} "hostname -I | awk '{print \$1}'")
+
+  if [ -n "$VPS_PUBLIC_IP" ]; then
+    OUTPUT_IP=$VPS_PUBLIC_IP
+    MODE="PUBLIC"
+  else
+    OUTPUT_IP=$VPS_PRIVATE_IP
+    MODE="PRIVATE (LAN/VPC Only)"
+  fi
+
+  echo "Creating reverse tunnel..."
   ssh -o StrictHostKeyChecking=no -N -R ${PUBLIC_PORT}:localhost:${LOCAL_PORT} ${VPS_USER}@${VPS_HOST} &
   PID=$!
 
   sleep 2
 
-  echo "${PID}:${PUBLIC_PORT}" >> $TUNNELS
+  echo "${PID}:${PUBLIC_PORT}" >> "$TUNNELS"
 
-  echo "================================"
-  echo "Tunnel Active!"
+  echo "========================================"
+  echo "Tunnel Status: ACTIVE"
+  echo "Mode: $MODE"
   echo "Protocol: $TYPE"
-  echo "Public Access: ${VPS_HOST}:${PUBLIC_PORT}"
-  echo "Local Port: $LOCAL_PORT"
-  echo "================================"
+  echo "Public Endpoint: ${OUTPUT_IP}:${PUBLIC_PORT}"
+  echo "Local Port: ${LOCAL_PORT}"
+  echo "PID: $PID"
+  echo "========================================"
 }
 
 delete_tunnel() {
@@ -63,22 +101,22 @@ delete_tunnel() {
   fi
 
   if [ ! -f "$TUNNELS" ]; then
-    echo "No tunnels found"
+    echo "No active tunnels found"
     exit 1
   fi
 
-  LINE=$(grep ":$PORT" $TUNNELS)
+  LINE=$(grep ":$PORT" "$TUNNELS")
 
   if [ -z "$LINE" ]; then
     echo "Tunnel not found"
     exit 1
   fi
 
-  PID=$(echo $LINE | cut -d ':' -f 1)
-  kill $PID
+  PID=$(echo "$LINE" | cut -d ':' -f 1)
+  kill $PID 2>/dev/null
 
-  grep -v ":$PORT" $TUNNELS > ${TUNNELS}.tmp
-  mv ${TUNNELS}.tmp $TUNNELS
+  grep -v ":$PORT" "$TUNNELS" > "${TUNNELS}.tmp"
+  mv "${TUNNELS}.tmp" "$TUNNELS"
 
   echo "Tunnel on port $PORT deleted"
 }
@@ -94,10 +132,71 @@ case "$1" in
     delete_tunnel "$2"
     ;;
   *)
-    echo "Superport CLI"
+    echo "Superport CLI (Auto IP Detection)"
     echo "Commands:"
     echo "  superport setup"
     echo "  superport add <tcp|http> <port>"
     echo "  superport del <public_port>"
     ;;
 esac
+
+############################
+# File: install.sh
+############################
+#!/usr/bin/env bash
+
+set -e
+
+echo "Installing Superport..."
+
+if ! command -v git &> /dev/null; then
+  sudo apt update && sudo apt install -y git curl
+fi
+
+git clone https://github.com/YOUR_USERNAME/superport.git
+chmod +x superport/superport
+sudo mv superport/superport /usr/local/bin/superport
+rm -rf superport
+
+clear
+echo "Superport installed successfully!"
+echo "Run: superport setup"
+
+############################
+# File: README.md
+############################
+# Superport
+
+A CLI port forwarding tool with automatic public/private IP detection.
+
+## Install
+```bash
+apt update && apt install -y git && git clone https://github.com/YOUR_USERNAME/superport && chmod +x superport/install.sh && bash superport/install.sh
+```
+
+## Setup
+```bash
+superport setup
+```
+
+## Usage
+Create tunnel:
+```bash
+superport add tcp 22
+```
+
+Output shows:
+- Mode (PUBLIC or PRIVATE)
+- Auto-detected IP
+- Working endpoint
+
+Delete tunnel:
+```bash
+superport del 30000
+```
+
+## Features
+- Auto public IP detection
+- Falls back to private IP if no public IP
+- Real SSH reverse tunneling
+- Random port allocation (20000-60000)
