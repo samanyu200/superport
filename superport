@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+CONFIG="$HOME/.superport.conf"
+TUNNELS="$HOME/.superport_tunnels"
+
+random_port() {
+  shuf -i 20000-60000 -n 1
+}
+
+setup() {
+  echo "=== Superport Setup ==="
+  read -p "Enter VPS IP or Domain: " VPS_HOST
+  read -p "Enter VPS Username: " VPS_USER
+
+  echo "VPS_HOST=$VPS_HOST" > $CONFIG
+  echo "VPS_USER=$VPS_USER" >> $CONFIG
+
+  echo "Setup saved!"
+}
+
+load_config() {
+  if [ ! -f "$CONFIG" ]; then
+    echo "Run: superport setup first"
+    exit 1
+  fi
+  source $CONFIG
+}
+
+add_tunnel() {
+  load_config
+  TYPE=$1
+  LOCAL_PORT=$2
+
+  if [ -z "$TYPE" ] || [ -z "$LOCAL_PORT" ]; then
+    echo "Usage: superport add <tcp|http> <port>"
+    exit 1
+  fi
+
+  PUBLIC_PORT=$(random_port)
+
+  echo "Creating tunnel..."
+  ssh -o StrictHostKeyChecking=no -N -R ${PUBLIC_PORT}:localhost:${LOCAL_PORT} ${VPS_USER}@${VPS_HOST} &
+  PID=$!
+
+  sleep 2
+
+  echo "${PID}:${PUBLIC_PORT}" >> $TUNNELS
+
+  echo "================================"
+  echo "Tunnel Active!"
+  echo "Protocol: $TYPE"
+  echo "Public Access: ${VPS_HOST}:${PUBLIC_PORT}"
+  echo "Local Port: $LOCAL_PORT"
+  echo "================================"
+}
+
+delete_tunnel() {
+  PORT=$1
+
+  if [ -z "$PORT" ]; then
+    echo "Usage: superport del <public_port>"
+    exit 1
+  fi
+
+  if [ ! -f "$TUNNELS" ]; then
+    echo "No tunnels found"
+    exit 1
+  fi
+
+  LINE=$(grep ":$PORT" $TUNNELS)
+
+  if [ -z "$LINE" ]; then
+    echo "Tunnel not found"
+    exit 1
+  fi
+
+  PID=$(echo $LINE | cut -d ':' -f 1)
+  kill $PID
+
+  grep -v ":$PORT" $TUNNELS > ${TUNNELS}.tmp
+  mv ${TUNNELS}.tmp $TUNNELS
+
+  echo "Tunnel on port $PORT deleted"
+}
+
+case "$1" in
+  setup)
+    setup
+    ;;
+  add)
+    add_tunnel "$2" "$3"
+    ;;
+  del)
+    delete_tunnel "$2"
+    ;;
+  *)
+    echo "Superport CLI"
+    echo "Commands:"
+    echo "  superport setup"
+    echo "  superport add <tcp|http> <port>"
+    echo "  superport del <public_port>"
+    ;;
+esac
